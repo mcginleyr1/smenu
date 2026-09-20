@@ -53,22 +53,39 @@ final class Overlay {
     func render(style: Style, look: Look, widths: PillWidths?, bars: [CGRect]) {
         let inputs = Inputs(style: style, look: look, widths: widths, bars: bars)
         guard inputs != rendered else { return }
-        rendered = inputs
-        windows.forEach { $0.close() }
-        windows = style == .off ? [] : bars.map { bar in
-            let window = BarWindow(contentRect: bar, styleMask: .borderless, backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            window.isOpaque = false
-            window.backgroundColor = .clear
-            window.hasShadow = false
-            window.ignoresMouseEvents = true
-            window.level = NSWindow.Level(Int(CGWindowLevelForKey(.mainMenuWindow)) + 1)
-            window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenNone]
-            for frame in pillFrames(in: CGRect(origin: .zero, size: bar.size), style: style, widths: widths) {
-                window.contentView?.addSubview(pill(frame, look: look))
+        let shown = style == .off ? [] : bars
+        if shown != windows.map(\.frame) {
+            windows.forEach { $0.close() }
+            windows = shown.map { bar in
+                let window = BarWindow(contentRect: bar, styleMask: .borderless, backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.isOpaque = false
+                window.backgroundColor = .clear
+                window.hasShadow = false
+                window.ignoresMouseEvents = true
+                window.level = NSWindow.Level(Int(CGWindowLevelForKey(.mainMenuWindow)) + 1)
+                window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenNone]
+                window.orderFrontRegardless()
+                return window
             }
-            window.orderFrontRegardless()
-            return window
+        }
+        let restyled = look != rendered?.look
+        rendered = inputs
+        for window in windows {
+            let frames = pillFrames(in: CGRect(origin: .zero, size: window.frame.size), style: style, widths: widths)
+            guard let content = window.contentView else { continue }
+            // The same pills slide to their new frames; a different number of them is a different picture.
+            if restyled || content.subviews.count != frames.count {
+                content.subviews = frames.map { pill($0, look: look) }
+                continue
+            }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.3
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                for (view, frame) in zip(content.subviews, frames) {
+                    view.animator().frame = frame
+                }
+            }
         }
     }
 
