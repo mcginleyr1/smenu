@@ -6,7 +6,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let defaults = UserDefaults.standard
     private let overlay = Overlay()
     private var divider: NSStatusItem!
-    private var dividerMaxX: CGFloat = 0
+    private var spacers: [NSStatusItem] = []
+    private var arranging = false
+    private var arrangeAttempts = 0
+    /// Items are laid out from the right edge, so this is the same on every display, unlike the divider's x.
+    private var dividerInset: CGFloat?
     private var overflowCatcher: NSWindow?
     private var lastWidths: PillWidths?
     private var timer: Timer?
@@ -32,6 +36,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         divider.button?.target = self
         divider.button?.action = #selector(dividerClicked)
         divider.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        // Created after the divider, so a fresh install places them directly left of it, where they belong.
+        spacers = ["smenu.spacer", "smenu.spacer2"].map { name in
+            let spacer = NSStatusBar.system.statusItem(withLength: 8)
+            spacer.autosaveName = name
+            spacer.button?.target = self
+            spacer.button?.action = #selector(dividerClicked)
+            spacer.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            return spacer
+        }
         applyCollapsed()
         // The divider has no position until the bar has laid it out, so size it again once it has.
         Timer.scheduledTimer(timeInterval: 1, target: self, selector: #selector(applyCollapsed), userInfo: nil, repeats: false)
@@ -49,6 +62,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func refresh() {
+        // Before stretching: the spacers can only be found and moved while everything is still narrow.
+        arrangeSpacers()
+        guard !arranging else { return }
+        stretchDivider()
         let style = style
         let look = look
         let bars = NSScreen.screens
@@ -60,37 +77,112 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // Hidden items keep reporting stale positions, so while collapsed the pill starts at the
         // divider's right end, leaving room for the system's « overflow marker drawn there.
-        let extrasMinX = collapsed && dividerMaxX > 0 ? dividerMaxX - 30 : nil
+        let extrasMinX = collapsed ? dividerInset.flatMap { inset in NSScreen.main.map { $0.frame.maxX - inset - 30 } } : nil
         Task {
             let widths = await Task.detached { await measurePillWidths(bars: bars, primaryMaxY: primaryMaxY, extrasMinX: extrasMinX) }.value
             // A failed measurement (a menu is open, an app is mid-launch) keeps the pills where they were.
             lastWidths = widths ?? lastWidths
+            stretchDivider()
             overlay.render(style: style, look: look, widths: lastWidths, bars: bars)
         }
     }
 
-    /// macOS 27 evicts a status item wider than the room right of the notch instead of letting it push
-    /// its neighbours off-screen, so the divider only fills the room up to the notch. The items to its
-    /// left then no longer fit there and the system moves them out of the way.
     @objc private func applyCollapsed() {
         // Status item frames go stale once an item is stretched, so only trust them while expanded.
-        if divider.length == 8, let frame = divider.button?.window?.frame {
-            dividerMaxX = frame.maxX
+        // Until the bar has laid the divider out, its window sits at the origin rather than in a menu bar.
+        if divider.length == 8, let window = divider.button?.window, let screen = window.screen, window.frame.maxY >= screen.frame.maxY {
+            dividerInset = screen.frame.maxX - window.frame.maxX
         }
-        let screen = NSScreen.screens.first { $0.frame.minX <= dividerMaxX && dividerMaxX <= $0.frame.maxX }
-        let boundary = screen?.auxiliaryTopRightArea?.minX ?? screen?.frame.midX ?? dividerMaxX
-        divider.length = collapsed ? max(dividerMaxX - boundary, 8) : 8
         divider.button?.title = collapsed ? "" : "│"
-        catchOverflowClicks(on: collapsed && dividerMaxX > 0 ? screen : nil)
+        spacers.forEach { $0.button?.title = collapsed ? "" : "┊" }
         refresh()
+    }
+
+    /// macOS 27 evicts a status item wider than half its screen instead of letting it push its neighbours
+    /// off-screen, so the divider only fills the room up to the notch. The items to its left then no
+    /// longer fit there and the system moves them out of the way. A display without a notch lets status
+    /// items run over the app menus until about 30pt past the app's name, which is further than one item
+    /// may span, so there the spacers beside the divider cover the rest.
+    /// Every display shows the same items at the same lengths. The divider therefore stays short enough
+    /// for every display; the spacers do not fit next to a notch and are evicted there, which is harmless.
+    private func stretchDivider() {
+        guard collapsed, let dividerInset else {
+            setLengths([8, 8, 8])
+            catchOverflowClicks(in: nil)
+            return
+        }
+        // Stopping 40pt past the app's name keeps the spacers from being evicted themselves while
+        // leaving less room than any item needs. 160 stands in for the name until it has been measured.
+        let pastAppName = (lastWidths?.appName ?? 160) + 40
+        let notchless = NSScreen.screens.filter { $0.auxiliaryTopRightArea == nil }
+        let notchReaches = NSScreen.screens.compactMap { screen in screen.auxiliaryTopRightArea.map { screen.frame.maxX - dividerInset - $0.minX } }
+        let menuReaches = notchless.map { $0.frame.width - dividerInset - pastAppName }
+        let longest = (notchless.map(\.frame.width).min() ?? .infinity) / 2 - 12
+        let dividerLength = max(min((notchReaches + menuReaches).min() ?? 8, longest), 8)
+        // Item windows are 6pt wider than their length.
+        let rest = (menuReaches.max() ?? 0) - dividerLength - 6
+        let first = min(max(rest - 20, 8), longest)
+        setLengths([dividerLength, first, min(max(rest - first - 12, 8), longest)])
+        catchOverflowClicks(in: NSScreen.main.map { screen in
+            CGRect(x: screen.frame.maxX - dividerInset - 36, y: screen.visibleFrame.maxY, width: 32, height: screen.frame.maxY - screen.visibleFrame.maxY)
+        })
+    }
+
+    /// macOS puts new status items at the far left and keeps their positions where smenu cannot write, so
+    /// a spacer that is not beside the divider is ⌘-dragged there the way a user would do it.
+    private func arrangeSpacers() {
+        guard !arranging, arrangeAttempts < 4, NSEvent.pressedMouseButtons == 0, AXIsProcessTrusted(),
+              let window = divider.button?.window, let screen = window.screen,
+              let primaryMaxY = NSScreen.screens.first?.frame.maxY
+        else { return }
+        // Frames still at their stretched width, or not in the bar at all, say nothing about where an item is.
+        let frames = ([divider!] + spacers).compactMap { $0.button?.window?.frame }
+        guard frames.count == spacers.count + 1, frames.allSatisfy({ $0.width < 20 && $0.maxY >= screen.frame.maxY }) else { return }
+        var edge = window.frame.minX
+        var loose = Array(frames.dropFirst())
+        while let beside = loose.firstIndex(where: { abs($0.maxX - edge) < 1 }) {
+            edge = loose.remove(at: beside).minX
+        }
+        guard let spacer = loose.first else { return }
+        arranging = true
+        arrangeAttempts += 1
+        NSLog("smenu: moving a spacer beside the divider")
+        let y = primaryMaxY - screen.frame.maxY + 12
+        let post = { (type: CGEventType, x: CGFloat) in
+            let event = CGEvent(mouseEventSource: CGEventSource(stateID: .hidSystemState), mouseType: type, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: .left)
+            event?.flags = .maskCommand
+            event?.post(tap: .cghidEventTap)
+        }
+        let cursor = CGEvent(source: nil)?.location
+        Task {
+            post(.leftMouseDown, spacer.midX)
+            try? await Task.sleep(for: .milliseconds(200))
+            for step in 1...20 {
+                post(.leftMouseDragged, spacer.midX + (edge - 3 - spacer.midX) * CGFloat(step) / 20)
+                try? await Task.sleep(for: .milliseconds(30))
+            }
+            try? await Task.sleep(for: .milliseconds(300))
+            post(.leftMouseUp, edge - 3)
+            cursor.map { _ = CGWarpMouseCursorPosition($0) }
+            // The bar takes a moment to settle before the next spacer can be measured.
+            try? await Task.sleep(for: .seconds(1))
+            arranging = false
+            refresh()
+        }
+    }
+
+    private func setLengths(_ lengths: [CGFloat]) {
+        for (item, length) in zip([divider!] + spacers, lengths) where item.length != length {
+            item.length = length
+        }
     }
 
     /// While collapsed the system draws its « overflow marker at the divider's right end; clicking it would
     /// reveal the hidden items left of the notch. A click-catcher above it expands smenu in place instead.
-    private func catchOverflowClicks(on screen: NSScreen?) {
+    private func catchOverflowClicks(in frame: CGRect?) {
+        guard overflowCatcher?.frame != frame else { return }
         overflowCatcher?.close()
-        overflowCatcher = screen.map { screen in
-            let frame = CGRect(x: dividerMaxX - 36, y: screen.visibleFrame.maxY, width: 32, height: screen.frame.maxY - screen.visibleFrame.maxY)
+        overflowCatcher = frame.map { frame in
             // Non-activating, so the click does not pull the menu bar away from the frontmost app.
             let window = BarWindow(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false

@@ -21,6 +21,15 @@ macOS 27 evicts over-wide status items, so the usual "stretch the divider to 100
 work. The divider instead fills the room up to the notch; macOS then moves the items that no longer
 fit to the left of the notch and shows its own `»` overflow marker, which smenu cannot remove.
 
+A display without a notch has no such stop: items may run over the app menus until just past the
+app's name, and no single item may be wider than half the screen. There the two `┊` spacers stretch
+as well, so both have to sit right of the items to hide, next to the `│`. macOS puts new items at the
+far left and keeps positions where smenu cannot write them, so smenu ⌘-drags a stray spacer into
+place itself with synthetic mouse events (needs Accessibility; the cursor jumps for a moment). The
+app name's width comes from the Split Pills measurement; other capsule styles assume a typical one.
+All displays share the same items at the same lengths, so the `│` never outgrows the notch room and
+the spacers make up the difference on the other displays.
+
 ## Build
 
 ```

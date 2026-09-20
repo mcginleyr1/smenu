@@ -4,6 +4,8 @@ import AppKit
 struct PillWidths: Equatable, Sendable {
     var menus: CGFloat
     var extras: CGFloat
+    /// Where the app's name, the menu after the Apple menu, ends.
+    var appName: CGFloat
 }
 
 /// macOS 27 draws every status item inside one MenuBarAgent window, so item positions
@@ -14,12 +16,14 @@ func measurePillWidths(bars: [CGRect], primaryMaxY: CGFloat, extrasMinX: CGFloat
         barItemFrames(pid: pid, bar: bar).map { $0.offsetBy(dx: 0, dy: primaryMaxY - 2 * $0.midY) }
     }
     // Not the active app: clicking smenu's own items can make smenu active, and it has no menus.
-    guard let active = NSWorkspace.shared.menuBarOwningApplication,
-          let menusMaxX = frames(active.processIdentifier, kAXMenuBarAttribute).map(\.maxX).max(),
+    guard let active = NSWorkspace.shared.menuBarOwningApplication else { return nil }
+    let menus = frames(active.processIdentifier, kAXMenuBarAttribute)
+    guard let menusMaxX = menus.map(\.maxX).max(),
           let bar = bars.first(where: { $0.minX < menusMaxX && menusMaxX <= $0.maxX })
     else { return nil }
+    let appName = (menus.dropFirst().first?.maxX ?? menusMaxX) - bar.minX
     if let extrasMinX {
-        return PillWidths(menus: menusMaxX - bar.minX, extras: bar.maxX - extrasMinX)
+        return PillWidths(menus: menusMaxX - bar.minX, extras: bar.maxX - extrasMinX, appName: appName)
     }
     // Apps that never answer cost a full timeout each, so ask them all at once.
     let extras = await withTaskGroup(of: [CGRect].self) { group in
@@ -30,7 +34,7 @@ func measurePillWidths(bars: [CGRect], primaryMaxY: CGFloat, extrasMinX: CGFloat
         return await group.reduce(into: []) { $0 += $1 }
     }
     guard let extrasMinX = extras.filter({ bar.contains(CGPoint(x: $0.midX, y: $0.midY)) }).map(\.minX).min() else { return nil }
-    return PillWidths(menus: menusMaxX - bar.minX, extras: bar.maxX - extrasMinX)
+    return PillWidths(menus: menusMaxX - bar.minX, extras: bar.maxX - extrasMinX, appName: appName)
 }
 
 private func barItemFrames(pid: pid_t, bar: String) -> [CGRect] {
