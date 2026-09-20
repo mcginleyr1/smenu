@@ -38,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         divider.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         // Created after the divider, so a fresh install places them directly left of it, where they belong.
         spacers = ["smenu.spacer", "smenu.spacer2"].map { name in
-            let spacer = NSStatusBar.system.statusItem(withLength: 8)
+            let spacer = NSStatusBar.system.statusItem(withLength: 1)
             spacer.autosaveName = name
             spacer.button?.target = self
             spacer.button?.action = #selector(dividerClicked)
@@ -94,7 +94,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             dividerInset = screen.frame.maxX - window.frame.maxX
         }
         divider.button?.title = collapsed ? "" : "│"
-        spacers.forEach { $0.button?.title = collapsed ? "" : "┊" }
         refresh()
     }
 
@@ -107,7 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// for every display; the spacers do not fit next to a notch and are evicted there, which is harmless.
     private func stretchDivider() {
         guard collapsed, let dividerInset else {
-            setLengths([8, 8, 8])
+            setLengths([8, 1, 1])
             catchOverflowClicks(in: nil)
             return
         }
