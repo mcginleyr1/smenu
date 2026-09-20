@@ -7,8 +7,15 @@ enum Style: String, CaseIterable {
 }
 
 enum Look: String, CaseIterable {
-    case glass = "Glass"
-    case frosted = "Frosted"
+    case light = "Light"
+    case dark = "Dark"
+
+    var fill: NSColor {
+        switch self {
+        case .light: NSColor(white: 1, alpha: 0.18)
+        case .dark: NSColor(white: 0, alpha: 0.28)
+        }
+    }
 }
 
 /// AppKit otherwise pushes windows down out of the menu bar area.
@@ -16,7 +23,8 @@ private final class BarWindow: NSWindow {
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
-/// Click-through windows sitting just beneath the (transparent) menu bar, one per screen.
+/// Click-through windows sitting just above the menu bar, one per screen. The bar only ever shows the
+/// wallpaper through itself, so anything beneath it is invisible; the pills are kept translucent instead.
 @MainActor
 final class Overlay {
     private struct Inputs: Equatable {
@@ -41,7 +49,7 @@ final class Overlay {
             window.backgroundColor = .clear
             window.hasShadow = false
             window.ignoresMouseEvents = true
-            window.level = NSWindow.Level(Int(CGWindowLevelForKey(.mainMenuWindow)) - 1)
+            window.level = NSWindow.Level(Int(CGWindowLevelForKey(.mainMenuWindow)) + 1)
             window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenNone]
             for frame in pillFrames(in: CGRect(origin: .zero, size: bar.size), style: style, widths: widths) {
                 window.contentView?.addSubview(pill(frame, look: look))
@@ -54,35 +62,20 @@ final class Overlay {
     private func pillFrames(in bar: CGRect, style: Style, widths: PillWidths?) -> [CGRect] {
         let margin: CGFloat = 6
         let capsule = bar.insetBy(dx: margin, dy: (bar.height / 8).rounded())
-        guard style == .split, let widths else { return [capsule] }
+        guard style == .split else { return [capsule] }
+        guard let widths else { return [] }
         let (menus, _) = capsule.divided(atDistance: widths.menus, from: .minXEdge)
         let (extras, _) = capsule.divided(atDistance: widths.extras, from: .maxXEdge)
         return menus.intersects(extras) ? [capsule] : [menus, extras]
     }
 
     private func pill(_ frame: CGRect, look: Look) -> NSView {
-        switch look {
-        case .glass:
-            let glass = NSGlassEffectView(frame: frame)
-            glass.cornerRadius = frame.height / 2
-            return glass
-        case .frosted:
-            let blur = NSVisualEffectView(frame: frame)
-            blur.material = .hudWindow
-            blur.blendingMode = .behindWindow
-            blur.state = .active
-            blur.maskImage = capsuleMask(height: frame.height)
-            return blur
-        }
-    }
-
-    private func capsuleMask(height: CGFloat) -> NSImage {
-        let mask = NSImage(size: NSSize(width: height + 1, height: height), flipped: false) { rect in
-            NSBezierPath(roundedRect: rect, xRadius: height / 2, yRadius: height / 2).fill()
-            return true
-        }
-        mask.capInsets = NSEdgeInsets(top: 0, left: height / 2, bottom: 0, right: height / 2)
-        mask.resizingMode = .stretch
-        return mask
+        let view = NSView(frame: frame)
+        view.wantsLayer = true
+        view.layer?.backgroundColor = look.fill.cgColor
+        view.layer?.cornerRadius = frame.height / 2
+        view.layer?.borderWidth = 1
+        view.layer?.borderColor = NSColor(white: 1, alpha: 0.3).cgColor
+        return view
     }
 }

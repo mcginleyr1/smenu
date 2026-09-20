@@ -1,4 +1,6 @@
 APP = build/smenu.app
+# A stable identity keeps the Accessibility grant across rebuilds; use SIGN=- for ad-hoc.
+SIGN ?= Apple Development
 
 .PHONY: app icon run install clean
 
@@ -8,7 +10,7 @@ app:
 	cp .build/release/smenu $(APP)/Contents/MacOS/smenu
 	cp Info.plist $(APP)/Contents/Info.plist
 	cp AppIcon.icns $(APP)/Contents/Resources/AppIcon.icns
-	codesign --force --sign - $(APP)
+	codesign --force --sign "$(SIGN)" $(APP)
 
 icon:
 	swift scripts/make-icon.swift build/AppIcon.iconset
