@@ -11,11 +11,11 @@ Requires macOS 26+ (built and tested on macOS 27).
   Apps pick the new spacing up when they relaunch; log out to apply it everywhere.
   Apple's own items (battery, Wi-Fi, Control Center, clock) ignore these keys on macOS 27.
 
-- **Hide section** – "Hide Icons Left of │" tucks everything left of the `│` divider away behind
-  macOS's own `«` overflow marker. Untick it to ⌘-drag items across the divider and choose what hides.
+- **Hide section** – click the `│` divider to tuck everything left of it away; macOS shows its own `«`
+  overflow marker in its place. Click the `«` to bring the items back. (smenu catches that click, so the
+  system's "reveal left of the notch" never runs.) ⌘-drag items across the `│` to choose what hides.
 
-Click the `│` (or, while hiding, the empty bar space left of `«`) for the menu: hiding, capsule,
-spacing, launch at login, and quit.
+Right-click (or ⌥-click) the `│` or the `«` for the menu: capsule, spacing, launch at login, and quit.
 
 macOS 27 evicts over-wide status items, so the usual "stretch the divider to 10000pt" trick does not
 work. The divider instead fills the room up to the notch; macOS then moves the items that no longer

@@ -8,19 +8,28 @@ struct PillWidths: Equatable, Sendable {
 
 /// macOS 27 draws every status item inside one MenuBarAgent window, so item positions
 /// are only available through Accessibility. `bars` are menu bar rects in Cocoa coordinates.
-func measurePillWidths(bars: [CGRect], primaryMaxY: CGFloat, extrasMinX: CGFloat?) -> PillWidths? {
+func measurePillWidths(bars: [CGRect], primaryMaxY: CGFloat, extrasMinX: CGFloat?) async -> PillWidths? {
     let apps = NSWorkspace.shared.runningApplications
-    let frames = { (app: NSRunningApplication, bar: String) in
-        barItemFrames(pid: app.processIdentifier, bar: bar).map { $0.offsetBy(dx: 0, dy: primaryMaxY - 2 * $0.midY) }
+    let frames = { @Sendable (pid: pid_t, bar: String) in
+        barItemFrames(pid: pid, bar: bar).map { $0.offsetBy(dx: 0, dy: primaryMaxY - 2 * $0.midY) }
     }
-    guard let active = apps.first(where: \.isActive),
-          let menusMaxX = frames(active, kAXMenuBarAttribute).map(\.maxX).max(),
+    // Not the active app: clicking smenu's own items can make smenu active, and it has no menus.
+    guard let active = NSWorkspace.shared.menuBarOwningApplication,
+          let menusMaxX = frames(active.processIdentifier, kAXMenuBarAttribute).map(\.maxX).max(),
           let bar = bars.first(where: { $0.minX < menusMaxX && menusMaxX <= $0.maxX })
     else { return nil }
-    guard let extrasMinX = extrasMinX ?? apps.flatMap({ frames($0, kAXExtrasMenuBarAttribute) })
-        .filter({ bar.contains(CGPoint(x: $0.midX, y: $0.midY)) })
-        .map(\.minX).min()
-    else { return nil }
+    if let extrasMinX {
+        return PillWidths(menus: menusMaxX - bar.minX, extras: bar.maxX - extrasMinX)
+    }
+    // Apps that never answer cost a full timeout each, so ask them all at once.
+    let extras = await withTaskGroup(of: [CGRect].self) { group in
+        for app in apps {
+            let pid = app.processIdentifier
+            group.addTask { frames(pid, kAXExtrasMenuBarAttribute) }
+        }
+        return await group.reduce(into: []) { $0 += $1 }
+    }
+    guard let extrasMinX = extras.filter({ bar.contains(CGPoint(x: $0.midX, y: $0.midY)) }).map(\.minX).min() else { return nil }
     return PillWidths(menus: menusMaxX - bar.minX, extras: bar.maxX - extrasMinX)
 }
 

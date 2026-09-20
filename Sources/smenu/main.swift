@@ -7,6 +7,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let overlay = Overlay()
     private var divider: NSStatusItem!
     private var dividerMaxX: CGFloat = 0
+    private var overflowCatcher: NSWindow?
+    private var lastWidths: PillWidths?
     private var timer: Timer?
 
     private var collapsed: Bool {
@@ -27,8 +29,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         divider = NSStatusBar.system.statusItem(withLength: 8)
         divider.autosaveName = "smenu.divider"
-        divider.menu = NSMenu()
-        divider.menu?.delegate = self
+        divider.button?.target = self
+        divider.button?.action = #selector(dividerClicked)
+        divider.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         applyCollapsed()
         // The divider has no position until the bar has laid it out, so size it again once it has.
         Timer.scheduledTimer(timeInterval: 1, target: self, selector: #selector(applyCollapsed), userInfo: nil, repeats: false)
@@ -59,8 +62,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // divider's right end, leaving room for the system's « overflow marker drawn there.
         let extrasMinX = collapsed && dividerMaxX > 0 ? dividerMaxX - 30 : nil
         Task {
-            let widths = await Task.detached { measurePillWidths(bars: bars, primaryMaxY: primaryMaxY, extrasMinX: extrasMinX) }.value
-            overlay.render(style: style, look: look, widths: widths, bars: bars)
+            let widths = await Task.detached { await measurePillWidths(bars: bars, primaryMaxY: primaryMaxY, extrasMinX: extrasMinX) }.value
+            // A failed measurement (a menu is open, an app is mid-launch) keeps the pills where they were.
+            lastWidths = widths ?? lastWidths
+            overlay.render(style: style, look: look, widths: lastWidths, bars: bars)
         }
     }
 
@@ -76,12 +81,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let boundary = screen?.auxiliaryTopRightArea?.minX ?? screen?.frame.midX ?? dividerMaxX
         divider.length = collapsed ? max(dividerMaxX - boundary, 8) : 8
         divider.button?.title = collapsed ? "" : "│"
+        catchOverflowClicks(on: collapsed && dividerMaxX > 0 ? screen : nil)
         refresh()
+    }
+
+    /// While collapsed the system draws its « overflow marker at the divider's right end; clicking it would
+    /// reveal the hidden items left of the notch. A click-catcher above it expands smenu in place instead.
+    private func catchOverflowClicks(on screen: NSScreen?) {
+        overflowCatcher?.close()
+        overflowCatcher = screen.map { screen in
+            let frame = CGRect(x: dividerMaxX - 36, y: screen.visibleFrame.maxY, width: 32, height: screen.frame.maxY - screen.visibleFrame.maxY)
+            // Non-activating, so the click does not pull the menu bar away from the frontmost app.
+            let window = BarWindow(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.isOpaque = false
+            window.backgroundColor = NSColor(white: 0, alpha: 0.01)
+            window.hasShadow = false
+            window.ignoresMouseEvents = false
+            window.level = NSWindow.Level(Int(CGWindowLevelForKey(.mainMenuWindow)) + 2)
+            window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenNone]
+            let view = ClickView()
+            view.onClick = { [weak self] event in self?.barClicked(event, in: view) }
+            window.contentView = view
+            window.orderFrontRegardless()
+            return window
+        }
+    }
+
+    private func barClicked(_ event: NSEvent, in view: NSView) {
+        guard event.type == .rightMouseDown || event.type == .rightMouseUp || event.modifierFlags.contains(.option) else {
+            toggleCollapsed()
+            return
+        }
+        let menu = NSMenu()
+        menuNeedsUpdate(menu)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: -4), in: view)
+    }
+
+    @objc private func dividerClicked() {
+        guard let event = NSApp.currentEvent, let button = divider.button else { return }
+        barClicked(event, in: button)
     }
 
     @objc private func toggleCollapsed() {
         collapsed.toggle()
         applyCollapsed()
+        // The bar takes a moment to lay the returning items out; re-measure instead of waiting for the timer.
+        // Common modes, so these still fire while the bar is tracking the mouse.
+        for delay in [0.3, 0.8] {
+            RunLoop.main.add(Timer(timeInterval: delay, target: self, selector: #selector(refresh), userInfo: nil, repeats: false), forMode: .common)
+        }
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {

@@ -19,8 +19,21 @@ enum Look: String, CaseIterable {
 }
 
 /// AppKit otherwise pushes windows down out of the menu bar area.
-private final class BarWindow: NSWindow {
+final class BarWindow: NSPanel {
+    override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing: NSWindow.BackingStoreType, defer flag: Bool) {
+        super.init(contentRect: contentRect, styleMask: style, backing: backing, defer: flag)
+        // Panels hide when their app is inactive, which a menu bar utility always is.
+        hidesOnDeactivate = false
+    }
+
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+}
+
+final class ClickView: NSView {
+    var onClick: (NSEvent) -> Void = { _ in }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) { onClick(event) }
+    override func rightMouseDown(with event: NSEvent) { onClick(event) }
 }
 
 /// Click-through windows sitting just above the menu bar, one per screen. The bar only ever shows the
